@@ -123,7 +123,7 @@ defmodule ReverseProxyPlug do
         # Add CORS headers
         conn =
           with [origin] <- Conn.get_req_header(conn, "origin"),
-               true <- allow_origin?(origin, allowed_origins, proxy_url) do
+               true <- allow_origin?(origin, allowed_origins) do
             conn
             |> Conn.put_resp_header("access-control-allow-origin", origin)
             |> Conn.put_resp_header("access-control-allow-methods", "GET, HEAD, OPTIONS")
