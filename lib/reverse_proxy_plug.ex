@@ -83,7 +83,8 @@ defmodule ReverseProxyPlug do
          :buffer,
          conn,
          %{status_code: status, body: body, headers: headers},
-         _allowed_origins
+         _allowed_origins,
+         _proxy_url
        ) do
     # TODO add CORS support for non-streaming
     resp_headers =
