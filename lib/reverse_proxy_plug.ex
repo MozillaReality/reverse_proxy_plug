@@ -24,6 +24,7 @@ defmodule ReverseProxyPlug do
     |> Keyword.put_new(:client, @http_client)
     |> Keyword.put_new(:client_options, [])
     |> Keyword.put_new(:response_mode, :stream)
+    |> Keyword.put_new(:allowed_origins, ["*"])
   end
 
   @spec call(Plug.Conn.t(), Keyword.t()) :: Plug.Conn.t()
@@ -45,7 +46,7 @@ defmodule ReverseProxyPlug do
   end
 
   def response({:ok, resp}, conn, opts) do
-    process_response(opts[:response_mode], conn, resp)
+    process_response(opts[:response_mode], conn, resp, opts[:allowed_origins], opts[:proxy_url])
   end
 
   def response(error, conn, opts) do
@@ -75,10 +76,11 @@ defmodule ReverseProxyPlug do
       |> Keyword.put(new_key, keywords[old_key])
       |> Keyword.delete(old_key)
 
-  defp process_response(:stream, conn, _resp),
-    do: stream_response(conn)
+  defp process_response(:stream, conn, _resp, allowed_origins, proxy_url),
+    do: stream_response(conn, allowed_origins, proxy_url)
 
-  defp process_response(:buffer, conn, %{status_code: status, body: body, headers: headers}) do
+  defp process_response(:buffer, conn, %{status_code: status, body: body, headers: headers}, _allowed_origins) do
+    # TODO add CORS support for non-streaming
     resp_headers =
       headers
       |> normalize_headers
@@ -88,29 +90,60 @@ defmodule ReverseProxyPlug do
     |> Conn.resp(status, body)
   end
 
-  @spec stream_response(Conn.t()) :: Conn.t()
-  defp stream_response(conn) do
+  @spec stream_response(Conn.t(), List.t()) :: Conn.t()
+  defp stream_response(conn, allowed_origins, proxy_url) do
     receive do
       %HTTPoison.AsyncStatus{code: code} ->
         conn
         |> Conn.put_status(code)
-        |> stream_response
+        |> stream_response(allowed_origins, proxy_url)
 
       %HTTPoison.AsyncHeaders{headers: headers} ->
-        headers
-        |> normalize_headers
-        |> Enum.reject(fn {header, _} -> header == "content-length" end)
-        |> Enum.concat([{"transfer-encoding", "chunked"}])
-        |> Enum.reduce(conn, fn {header, value}, conn ->
-          Conn.put_resp_header(conn, header, value)
-        end)
+        conn =
+          headers
+          |> normalize_headers()
+          |> Enum.reject(fn {header, _} -> header == "content-length" end)
+          |> Enum.reduce(conn, fn {header, value}, conn ->
+            Conn.put_resp_header(conn, header, value)
+          end)
+          |> Conn.put_resp_header("vary", "origin")
+          |> Conn.put_resp_header("x-content-type-options", "nosniff")
+
+        # Handle redirects
+        conn =
+          if proxy_url do
+            case headers |> Enum.find(fn {h, _} -> String.downcase(h) == "location" end) do
+              nil -> conn
+              {_, location} -> conn |> Conn.put_resp_header("location", "#{proxy_url}/#{location}")
+            end
+          else
+            conn
+          end
+
+        # Add CORS headers
+        conn =
+          with [origin] <- Conn.get_req_header(conn, "origin"),
+               true <- allow_origin?(origin, allowed_origins, proxy_url) do
+            conn
+            |> Conn.put_resp_header("access-control-allow-origin", origin)
+            |> Conn.put_resp_header("access-control-allow-methods", "GET, HEAD, OPTIONS")
+            |> Conn.put_resp_header("access-control-allow-headers", "Range")
+            |> Conn.put_resp_header(
+              "access-control-expose-headers",
+              "Accept-Ranges, Content-Encoding, Content-Length, Content-Range"
+            )
+          else
+            _ -> conn
+          end
+
+        conn
         |> Conn.send_chunked(conn.status)
-        |> stream_response
+        |> stream_response(allowed_origins, proxy_url)
 
       %HTTPoison.AsyncChunk{chunk: chunk} ->
         case Conn.chunk(conn, chunk) do
           {:ok, conn} ->
-            stream_response(conn)
+            stream_response(conn, allowed_origins)
 
           {:error, :closed} ->
             conn
@@ -204,6 +237,10 @@ defmodule ReverseProxyPlug do
 
     headers
     |> Enum.reject(fn {header, _} -> Enum.member?(hop_by_hop_headers, header) end)
+  end
+
+  defp allow_origin?(origin, allowed_origins) do
+    allowed_origins == ["*"] || Enum.any?(allowed_origins, fn o -> o === origin end)
   end
 
   def read_body(conn) do
