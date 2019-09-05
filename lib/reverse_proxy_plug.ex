@@ -143,7 +143,7 @@ defmodule ReverseProxyPlug do
       %HTTPoison.AsyncChunk{chunk: chunk} ->
         case Conn.chunk(conn, chunk) do
           {:ok, conn} ->
-            stream_response(conn, allowed_origins)
+            stream_response(conn, allowed_origins, proxy_url)
 
           {:error, :closed} ->
             conn
