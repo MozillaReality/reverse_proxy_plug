@@ -79,7 +79,12 @@ defmodule ReverseProxyPlug do
   defp process_response(:stream, conn, _resp, allowed_origins, proxy_url),
     do: stream_response(conn, allowed_origins, proxy_url)
 
-  defp process_response(:buffer, conn, %{status_code: status, body: body, headers: headers}, _allowed_origins) do
+  defp process_response(
+         :buffer,
+         conn,
+         %{status_code: status, body: body, headers: headers},
+         _allowed_origins
+       ) do
     # TODO add CORS support for non-streaming
     resp_headers =
       headers
@@ -90,7 +95,6 @@ defmodule ReverseProxyPlug do
     |> Conn.resp(status, body)
   end
 
-  @spec stream_response(Conn.t(), List.t()) :: Conn.t()
   defp stream_response(conn, allowed_origins, proxy_url) do
     receive do
       %HTTPoison.AsyncStatus{code: code} ->
@@ -113,8 +117,11 @@ defmodule ReverseProxyPlug do
         conn =
           if proxy_url do
             case headers |> Enum.find(fn {h, _} -> String.downcase(h) == "location" end) do
-              nil -> conn
-              {_, location} -> conn |> Conn.put_resp_header("location", "#{proxy_url}/#{location}")
+              nil ->
+                conn
+
+              {_, location} ->
+                conn |> Conn.put_resp_header("location", "#{proxy_url}/#{location}")
             end
           else
             conn
