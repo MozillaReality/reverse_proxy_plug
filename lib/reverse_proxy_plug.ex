@@ -148,7 +148,7 @@ defmodule ReverseProxyPlug do
             |> Conn.put_resp_header("access-control-allow-headers", "Range")
             |> Conn.put_resp_header(
               "access-control-expose-headers",
-              "Accept-Ranges, Content-Encoding, Content-Length, Content-Range"
+              "Accept-Ranges, Content-Encoding, Content-Length, Content-Range, Hub-Name, Hub-Entity-Type"
             )
           else
             _ -> conn
