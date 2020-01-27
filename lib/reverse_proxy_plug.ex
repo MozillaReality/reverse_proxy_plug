@@ -46,7 +46,7 @@ defmodule ReverseProxyPlug do
   end
 
   def response({:ok, resp}, conn, opts) do
-    process_response(opts[:response_mode], conn, resp, opts[:allowed_origins], opts[:proxy_url])
+    process_response(opts[:response_mode], conn, resp, opts[:allowed_origins], opts[:proxy_url], opts[:upstream])
   end
 
   def response(error, conn, opts) do
@@ -76,15 +76,16 @@ defmodule ReverseProxyPlug do
       |> Keyword.put(new_key, keywords[old_key])
       |> Keyword.delete(old_key)
 
-  defp process_response(:stream, conn, _resp, allowed_origins, proxy_url),
-    do: stream_response(conn, allowed_origins, proxy_url)
+  defp process_response(:stream, conn, _resp, allowed_origins, proxy_url, upstream_url),
+    do: stream_response(conn, allowed_origins, proxy_url, upstream_url)
 
   defp process_response(
          :buffer,
          conn,
          %{status_code: status, body: body, headers: headers},
          _allowed_origins,
-         _proxy_url
+         _proxy_url,
+         _upstream_url
        ) do
     # TODO add CORS support for non-streaming
     resp_headers =
@@ -96,12 +97,12 @@ defmodule ReverseProxyPlug do
     |> Conn.resp(status, body)
   end
 
-  defp stream_response(conn, allowed_origins, proxy_url) do
+  defp stream_response(conn, allowed_origins, proxy_url, upstream_url) do
     receive do
       %HTTPoison.AsyncStatus{code: code} ->
         conn
         |> Conn.put_status(code)
-        |> stream_response(allowed_origins, proxy_url)
+        |> stream_response(allowed_origins, proxy_url, upstream_url)
 
       %HTTPoison.AsyncHeaders{headers: headers} ->
         conn =
@@ -120,6 +121,15 @@ defmodule ReverseProxyPlug do
             case headers |> Enum.find(fn {h, _} -> String.downcase(h) == "location" end) do
               nil ->
                 conn
+
+              {_, "/" <> _rest = location} ->
+                %URI{host: host, port: port, scheme: scheme} = URI.parse(upstream_url)
+
+                conn
+                |> Conn.put_resp_header(
+                  "location",
+                  "#{proxy_url}/#{scheme}://#{host}:#{port}#{location}"
+                )
 
               {_, location} ->
                 conn |> Conn.put_resp_header("location", "#{proxy_url}/#{location}")
@@ -146,12 +156,12 @@ defmodule ReverseProxyPlug do
 
         conn
         |> Conn.send_chunked(conn.status)
-        |> stream_response(allowed_origins, proxy_url)
+        |> stream_response(allowed_origins, proxy_url, upstream_url)
 
       %HTTPoison.AsyncChunk{chunk: chunk} ->
         case Conn.chunk(conn, chunk) do
           {:ok, conn} ->
-            stream_response(conn, allowed_origins, proxy_url)
+            stream_response(conn, allowed_origins, proxy_url, upstream_url)
 
           {:error, :closed} ->
             conn
