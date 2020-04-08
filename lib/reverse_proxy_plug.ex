@@ -24,8 +24,10 @@ defmodule ReverseProxyPlug do
     |> Keyword.put_new(:client, @http_client)
     |> Keyword.put_new(:client_options, [])
     |> Keyword.put_new(:response_mode, :stream)
-    |> Keyword.put_new(:allow_origin, fn (_) -> true end)
+    |> Keyword.put_new(:allow_origin, &ReverseProxyPlug.default_allow_origin/1)
   end
+
+  def default_allow_origin(_), do: true
 
   @spec call(Plug.Conn.t(), Keyword.t()) :: Plug.Conn.t()
   def call(conn, opts) do
