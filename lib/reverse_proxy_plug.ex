@@ -24,7 +24,7 @@ defmodule ReverseProxyPlug do
     |> Keyword.put_new(:client, @http_client)
     |> Keyword.put_new(:client_options, [])
     |> Keyword.put_new(:response_mode, :stream)
-    |> Keyword.put_new(:allowed_origins, ["*"])
+    |> Keyword.put_new(:allow_origin, fn (_) -> true end)
   end
 
   @spec call(Plug.Conn.t(), Keyword.t()) :: Plug.Conn.t()
@@ -46,7 +46,7 @@ defmodule ReverseProxyPlug do
   end
 
   def response({:ok, resp}, conn, opts) do
-    process_response(opts[:response_mode], conn, resp, opts[:allowed_origins], opts[:proxy_url], opts[:upstream])
+    process_response(opts[:response_mode], conn, resp, opts[:allow_origin], opts[:proxy_url], opts[:upstream])
   end
 
   def response(error, conn, opts) do
@@ -76,14 +76,14 @@ defmodule ReverseProxyPlug do
       |> Keyword.put(new_key, keywords[old_key])
       |> Keyword.delete(old_key)
 
-  defp process_response(:stream, conn, _resp, allowed_origins, proxy_url, upstream_url),
-    do: stream_response(conn, allowed_origins, proxy_url, upstream_url)
+  defp process_response(:stream, conn, _resp, allow_origin, proxy_url, upstream_url),
+    do: stream_response(conn, allow_origin, proxy_url, upstream_url)
 
   defp process_response(
          :buffer,
          conn,
          %{status_code: status, body: body, headers: headers},
-         _allowed_origins,
+         _allow_origin,
          _proxy_url,
          _upstream_url
        ) do
@@ -97,12 +97,12 @@ defmodule ReverseProxyPlug do
     |> Conn.resp(status, body)
   end
 
-  defp stream_response(conn, allowed_origins, proxy_url, upstream_url) do
+  defp stream_response(conn, allow_origin, proxy_url, upstream_url) do
     receive do
       %HTTPoison.AsyncStatus{code: code} ->
         conn
         |> Conn.put_status(code)
-        |> stream_response(allowed_origins, proxy_url, upstream_url)
+        |> stream_response(allow_origin, proxy_url, upstream_url)
 
       %HTTPoison.AsyncHeaders{headers: headers} ->
         conn =
@@ -141,7 +141,7 @@ defmodule ReverseProxyPlug do
         # Add CORS headers
         conn =
           with [origin] <- Conn.get_req_header(conn, "origin"),
-               true <- allow_origin?(origin, allowed_origins) do
+               true <- allow_origin.(origin) do
             conn
             |> Conn.put_resp_header("access-control-allow-origin", origin)
             |> Conn.put_resp_header("access-control-allow-methods", "GET, HEAD, OPTIONS")
@@ -156,12 +156,12 @@ defmodule ReverseProxyPlug do
 
         conn
         |> Conn.send_chunked(conn.status)
-        |> stream_response(allowed_origins, proxy_url, upstream_url)
+        |> stream_response(allow_origin, proxy_url, upstream_url)
 
       %HTTPoison.AsyncChunk{chunk: chunk} ->
         case Conn.chunk(conn, chunk) do
           {:ok, conn} ->
-            stream_response(conn, allowed_origins, proxy_url, upstream_url)
+            stream_response(conn, allow_origin, proxy_url, upstream_url)
 
           {:error, :closed} ->
             conn
@@ -255,10 +255,6 @@ defmodule ReverseProxyPlug do
 
     headers
     |> Enum.reject(fn {header, _} -> Enum.member?(hop_by_hop_headers, header) end)
-  end
-
-  defp allow_origin?(origin, allowed_origins) do
-    allowed_origins == ["*"] || Enum.any?(allowed_origins, fn o -> o === origin end)
   end
 
   def read_body(conn) do
